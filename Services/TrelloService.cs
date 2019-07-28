@@ -11,7 +11,7 @@ namespace esdc_sa_appdev_reporting_api.Services
 {
     public class TrelloService
     {
-        public async Task<List<List<string>>> GetSummaryReportResults()
+        public async Task<SummaryReportData> GetSummaryReportResults()
         {
             /*
                 The resulting result matrix must have the following format:
@@ -28,7 +28,7 @@ namespace esdc_sa_appdev_reporting_api.Services
                 the tallied number of cards per list in order of Backlog to Done.        
             */
 
-            var results = new List<List<string>>();
+            var compiledResults = new List<List<string>>();
 
             var reportResultItems = await this.GetGeneralReportResults();
 
@@ -43,16 +43,7 @@ namespace esdc_sa_appdev_reporting_api.Services
 
             foreach (var result in applicableResults)
             {
-                // Get the first green label of the card (should only be only, but just in case, we'll grab the first).
-                var subCategoryLabel = result.CardLabels.FirstOrDefault(x => x.Color == SolutionConstants.TrelloLabelCategory.Client);
-
-                // Get the label sub-category (meaning, remove the prefix, i.e. "Client: ")
-                var posLabelSeparator = subCategoryLabel.Name.IndexOf(SolutionConstants.kLabelSeperator);
-                
-                var clientKey = (((posLabelSeparator > 0) && (posLabelSeparator < (subCategoryLabel.Name.Length - 1))) 
-                    ? subCategoryLabel.Name.Substring(posLabelSeparator + 1) 
-                    : subCategoryLabel.Name)
-                    .Trim();
+                var clientKey = this.ExtractClientName(result.CardLabels);
 
                 // Tally the nbr of cards
                 if (compiledResultMatrix.ContainsKey(clientKey) == false)
@@ -94,11 +85,11 @@ namespace esdc_sa_appdev_reporting_api.Services
                     }
                 }
 
-                results.Add(trelloClientValues);
+                compiledResults.Add(trelloClientValues);
             }
 
             // Order the clients alphabetically
-            results = results.OrderBy(x => x.FirstOrDefault()).ToList();
+            compiledResults = compiledResults.OrderBy(x => x.FirstOrDefault()).ToList();
             
             // Add the first result row.
             var firstResultSetValues = new List<string>();
@@ -110,9 +101,33 @@ namespace esdc_sa_appdev_reporting_api.Services
             firstResultSetValues.Add(SolutionConstants.TrelloLists.OnHold);
             firstResultSetValues.Add(SolutionConstants.TrelloLists.Done);
 
-            results.Insert(0, firstResultSetValues);
+            compiledResults.Insert(0, firstResultSetValues);
 
-            return results;
+            // Gather raw results
+            var reportItemResults = new List<SummaryReportItemResult>();
+
+            foreach(var card in applicableResults)
+            {
+                var reportItemResult = new SummaryReportItemResult();
+
+                reportItemResult.TaskName = card.CardTitle;
+                reportItemResult.ClientName = this.ExtractClientName(card.CardLabels);
+                reportItemResult.StatusTitle = card.CardCurrentListTitle;
+                reportItemResult.DateStarted = card.CardDateStarted?.ToString(CoreConstants.Formats.DateIso);
+                reportItemResult.DateCompleted = card.CardDateCompleted?.ToString(CoreConstants.Formats.DateIso);
+                reportItemResult.AssignedTo = string.Join(", ", card.CardMembers.Select(x => x.Value).ToList());
+                reportItemResult.Url = card.CardUrl;
+
+                reportItemResults.Add(reportItemResult);
+            }
+
+            // Assign result model values
+            var resultModel = new SummaryReportData();
+
+            resultModel.CompiledResults = compiledResults;
+            resultModel.ReportItemResults = reportItemResults;
+
+            return resultModel;
         }
 
 
@@ -120,6 +135,8 @@ namespace esdc_sa_appdev_reporting_api.Services
         {
             // 1. Gather all cards
             // 2. Compute date started and completed
+            //    2.a) Cards that were transferred from Backlog or Committed
+            //    2.b) Cards that were created directly in either In Progress, On Hold or Done.
             // 3. Compute number of days on hold
 
             var results = new List<GeneralReportResult>();
@@ -129,6 +146,7 @@ namespace esdc_sa_appdev_reporting_api.Services
             var trelloMembers = await this.GetTrelloMembers();
             var trelloCards = await this.GetTrelloCards();
             var trelloCardMoveActions = await this.GetTrelloCardMoveActions();
+            var trelloCardCreatedActions = await this.GetTrelloCardCreateActions();
 
             // Pre-sort
             trelloCardMoveActions
@@ -144,6 +162,7 @@ namespace esdc_sa_appdev_reporting_api.Services
                 result.CardTitle = card.name;
                 result.CardCurrentListId = card.idList;
                 result.CardCurrentListTitle = trelloLists.SingleOrDefault(x => x.id == card.idList)?.name;
+                result.CardUrl = card.url;
                 
                 foreach (var labelId in card.idLabels)
                 {
@@ -173,9 +192,10 @@ namespace esdc_sa_appdev_reporting_api.Services
                 }
 
                 // Card in backlog and committed aren't considered started.
-                if ((result.CardCurrentListTitle != SolutionConstants.TrelloLists.Backlog) ||
+                if ((result.CardCurrentListTitle != SolutionConstants.TrelloLists.Backlog) &&
                     (result.CardCurrentListTitle != SolutionConstants.TrelloLists.Committed))
                 {
+                    // 2.a)
                     var action = trelloCardMoveActions
                         .Where
                         (   
@@ -183,17 +203,33 @@ namespace esdc_sa_appdev_reporting_api.Services
                                 (x.data.card.id == card.id) && 
                                 (x.data.listAfter.name == SolutionConstants.TrelloLists.InProgress)
                         )
+                        .OrderBy(x => x.date)
                         .FirstOrDefault();
+
+                    // 2.b)
+                    if (action == null)
+                    {
+                        action = trelloCardCreatedActions
+                            .Where(x => x.data.card.id == card.id)
+                            .OrderBy(x => x.date)
+                            .FirstOrDefault();
+                    }
 
                     result.CardDateStarted = action?.date;
                 }
 
                 // Only cards in done are considered completed.
-                if (result.CardCurrentListTitle != SolutionConstants.TrelloLists.Done)
+                if (result.CardCurrentListTitle == SolutionConstants.TrelloLists.Done)
                 {
                     var action = trelloCardMoveActions
-                        .Where(x => (x.data.card.id == card.id) && x.data.listAfter.name == SolutionConstants.TrelloLists.Done)
-                        .LastOrDefault();
+                        .Where
+                        (
+                            x => 
+                                (x.data.card.id == card.id) && 
+                                (x.data.listAfter.name == SolutionConstants.TrelloLists.Done)
+                        )
+                        .OrderByDescending(x => x.date)
+                        .FirstOrDefault();
 
                     result.CardDateCompleted = action?.date;
                 }
@@ -317,7 +353,39 @@ namespace esdc_sa_appdev_reporting_api.Services
         }
 
 
-        // https://stackoverflow.com/questions/51777063/how-can-i-get-all-actions-for-a-board-using-trellos-rest-api
+        public async Task<List<TrelloActionDto>> GetTrelloCardCreateActions()
+        {
+            // Reference: https://stackoverflow.com/questions/51777063/how-can-i-get-all-actions-for-a-board-using-trellos-rest-api
+
+            using (var http = new HttpClient())
+            {
+                try
+                {
+                    var url = "https://api.trello.com/1/boards/" + SolutionConstants.kTrelloBoardId + "/actions/"
+                        + "?key=" + SolutionConstants.kTrelloAppKey 
+                        + "&token=" + SolutionConstants.kTrelloUserToken
+                        //+ "&before=2019-07-01"
+                        //+ "&since=2019-06-01"
+                        + "&filter=createCard" 
+                        + "&limit=1000";
+
+                    var response = await http.GetAsync(url);
+
+                    response.EnsureSuccessStatusCode();
+
+                    var jsonResult = await response.Content.ReadAsStringAsync();
+
+                    return JsonConvert.DeserializeObject<List<TrelloActionDto>>(jsonResult);
+                }
+                catch (HttpRequestException httpRequestException)
+                {
+                    Console.WriteLine($"Error in GetTrelloCardMoveActions: {httpRequestException.Message}");
+                }
+
+                return null;
+            }
+        }
+
 
         public async Task<List<TrelloActionDto>> GetTrelloCardMoveActions()
         {
@@ -351,5 +419,26 @@ namespace esdc_sa_appdev_reporting_api.Services
                 return null;
             }
         }
+
+        
+        #region --- Private -------------------------------------------------------
+
+        private string ExtractClientName (List<LabelResult> cardLabels)
+        {
+            // Get the first green label of the card (should only be only, but just in case, we'll grab the first).
+            var clientLabel = cardLabels.FirstOrDefault(x => x.Color == SolutionConstants.TrelloLabelCategory.Client);
+
+            // Get the label sub-category (meaning, remove the prefix, i.e. "Client: ")
+            var posLabelSeparator = clientLabel.Name.IndexOf(SolutionConstants.kLabelSeperator);
+            
+            var clientName = (((posLabelSeparator > 0) && (posLabelSeparator < (clientLabel.Name.Length - 1))) 
+                ? clientLabel.Name.Substring(posLabelSeparator + 1) 
+                : clientLabel.Name)
+                .Trim();
+
+            return clientName;
+        }
+
+        #endregion
     }
 }

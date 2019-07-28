@@ -2,16 +2,16 @@ using System.Collections.Generic;
 
 namespace esdc_sa_appdev_reporting_api.Models
 {
-    public class SummaryReportResult
+    public class SummaryReportData
     {
         public List<List<string>> CompiledResults { get; set; }
-        public List<GeneralReportResult> RawResults { get; set; }
+        public List<SummaryReportItemResult> ReportItemResults { get; set; }
 
 
-        public SummaryReportResult()
+        public SummaryReportData()
         {
             this.CompiledResults = new List<List<string>>();
-            this.RawResults = new List<GeneralReportResult>();
+            this.ReportItemResults = new List<SummaryReportItemResult>();
         }
     }
 }

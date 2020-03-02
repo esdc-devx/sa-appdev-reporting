@@ -277,7 +277,8 @@ namespace esdc_sa_appdev_reporting_api.Services
                 {
                     var url = "https://api.trello.com/1/boards/" + SolutionConstants.kTrelloBoardId + "/labels/"
                         + "?key=" + SolutionConstants.kTrelloAppKey 
-                        + "&token=" + SolutionConstants.kTrelloUserToken;
+                        + "&token=" + SolutionConstants.kTrelloUserToken
+                        + "&limit=1000";
 
                     var response = await http.GetAsync(url);
 

@@ -22,7 +22,7 @@ namespace esdc_sa_appdev_reporting_api.Constants
         public static class TrelloLists
         {
             public const string Backlog = "Backlog";
-            public const string Committed = "Committed";
+            public const string Committed = "Sprint Backlog";
             public const string InProgress = "In Progress";
             public const string OnHold = "On Hold / Blocked";
             public const string Done = "Done";

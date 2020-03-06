@@ -10,6 +10,19 @@ namespace esdc_sa_appdev_reporting_api.Models
         public TrelloActionDataDto data { get; set; }
 
 
+        public DateTime DateFromId 
+        { 
+            get
+            {
+                var timestamp = int.Parse(this.id.Substring(0, 8), System.Globalization.NumberStyles.HexNumber);
+                
+                var dateTimeOffset = DateTimeOffset.FromUnixTimeSeconds(timestamp);
+
+                return dateTimeOffset.UtcDateTime;
+            }
+        }
+
+
         public TrelloActionDto()
         {
             data = new TrelloActionDataDto();            

@@ -67,6 +67,7 @@ namespace esdc_sa_appdev_reporting_api.Constants
         public const string kTrelloUserSecret = "861101898508498761cd2952b258926b568326994f44ef23fd85ca3685667525";
         public const string kTrelloUserToken = "9a4b5cc8411e7380cf8fc392341f118e2f32869ac50a134fb9bd81f43fb0fe62";
         public const string kTrelloBoardId = "5cdf08913ae8753993cfdd9c";
+        public const int kTrelloLimitMax = 1000;
 
         public const string kLabelSeperator = ":";
 

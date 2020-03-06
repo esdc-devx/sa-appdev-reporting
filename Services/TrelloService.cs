@@ -144,9 +144,9 @@ namespace esdc_sa_appdev_reporting_api.Services
             var trelloLists = await this.GetTrelloLists();
             var trelloLabels = await this.GetTrelloLabels();
             var trelloMembers = await this.GetTrelloMembers();
-            var trelloCards = await this.GetTrelloCards();
-            var trelloCardMoveActions = await this.GetTrelloCardMoveActions();
-            var trelloCardCreatedActions = await this.GetTrelloCardCreateActions();
+            var trelloCards = await this.GetAllTrelloCards();
+            var trelloCardMoveActions = await this.GetAllTrelloCardMoveActions();
+            var trelloCardCreatedActions = await this.GetAllTrelloCardCreateActions();
 
             // Pre-sort
             trelloCardMoveActions
@@ -264,7 +264,7 @@ namespace esdc_sa_appdev_reporting_api.Services
                     Console.WriteLine($"Error in GetTrelloLists: {httpRequestException.Message}");
                 }
 
-                return null;
+                return new List<TrelloListDto>();
             }
         }
 
@@ -293,7 +293,7 @@ namespace esdc_sa_appdev_reporting_api.Services
                     Console.WriteLine($"Error in GetTrelloLabels: {httpRequestException.Message}");
                 }
 
-                return null;
+                return new List<TrelloLabelsDto>();
             }
         }
 
@@ -321,12 +321,45 @@ namespace esdc_sa_appdev_reporting_api.Services
                     Console.WriteLine($"Error in GetTrelloMembers: {httpRequestException.Message}");
                 }
 
-                return null;
+                return new List<TrelloMemberDto>();
             }
         }
 
 
-        public async Task<List<TrelloCardDto>> GetTrelloCards()
+        public async Task<List<TrelloCardDto>> GetAllTrelloCards()
+        {
+            var trelloCards = new List<TrelloCardDto>();
+            var beforeDate = DateTime.Now;
+            var isBreak = false;
+
+            while (isBreak == false)
+            {
+                var results = await this.GetTrelloCards(beforeDate);
+
+                if (results.Count < SolutionConstants.kTrelloLimitMax)
+                {
+                    isBreak = true;
+                }
+                else
+                {
+                    // Grab the earliest date of the results.
+                    var dateMin = results.Min(x => x.DateFromId);
+
+                    // Because the earliest timestamp record may not necessarily be the last record within a given day, the target date is the last date + 1.                    
+                    beforeDate = dateMin.AddDays(1).Date;
+
+                    // Only keep the results of the last known full day.
+                    results = results.Where(x => x.DateFromId >= beforeDate).ToList();
+                }
+
+                trelloCards.AddRange(results);
+            }
+
+            return trelloCards;
+        }
+
+
+        public async Task<List<TrelloCardDto>> GetTrelloCards(DateTime beforeDate)
         {
             using (var http = new HttpClient())
             {
@@ -334,7 +367,9 @@ namespace esdc_sa_appdev_reporting_api.Services
                 {
                     var url = "https://api.trello.com/1/boards/" + SolutionConstants.kTrelloBoardId + "/cards/"
                         + "?key=" + SolutionConstants.kTrelloAppKey 
-                        + "&token=" + SolutionConstants.kTrelloUserToken;
+                        + "&token=" + SolutionConstants.kTrelloUserToken
+                        + "&before=" + beforeDate.ToString(CoreConstants.Formats.DtmZuluIso)
+                        + "&limit=" + SolutionConstants.kTrelloLimitMax.ToString();
 
                     var response = await http.GetAsync(url);
 
@@ -349,15 +384,47 @@ namespace esdc_sa_appdev_reporting_api.Services
                     Console.WriteLine($"Error in GetTrelloCards: {httpRequestException.Message}");
                 }
 
-                return null;
+                return new List<TrelloCardDto>();
             }
         }
 
 
-        public async Task<List<TrelloActionDto>> GetTrelloCardCreateActions()
+        public async Task<List<TrelloActionDto>> GetAllTrelloCardMoveActions()
         {
-            // Reference: https://stackoverflow.com/questions/51777063/how-can-i-get-all-actions-for-a-board-using-trellos-rest-api
+            var trelloActions = new List<TrelloActionDto>();
+            var beforeDate = DateTime.Now;
+            var isBreak = false;
 
+            while (isBreak == false)
+            {
+                var results = await this.GetTrelloCardMoveActions(beforeDate);
+
+                if (results.Count < SolutionConstants.kTrelloLimitMax)
+                {
+                    isBreak = true;
+                }
+                else
+                {
+                    // Grab the earliest date of the results.
+                    var dateMin = results.Min(x => x.DateFromId);
+
+                    // Because the earliest timestamp record may not necessarily be the last record within a given day, the target date is the last date + 1.                    
+                    beforeDate = dateMin.AddDays(1).Date;
+
+                    // Only keep the results of the last known full day.
+                    results = results.Where(x => x.DateFromId >= beforeDate).ToList();
+                }
+
+                trelloActions.AddRange(results);
+            }
+
+            // Only keep the records that where list transfers.
+            return trelloActions.Where(x => (x.IsListTransfer() == true)).ToList();
+        }
+
+
+        public async Task<List<TrelloActionDto>> GetTrelloCardMoveActions(DateTime beforeDate)
+        {
             using (var http = new HttpClient())
             {
                 try
@@ -365,10 +432,10 @@ namespace esdc_sa_appdev_reporting_api.Services
                     var url = "https://api.trello.com/1/boards/" + SolutionConstants.kTrelloBoardId + "/actions/"
                         + "?key=" + SolutionConstants.kTrelloAppKey 
                         + "&token=" + SolutionConstants.kTrelloUserToken
-                        //+ "&before=2019-07-01"
+                        + "&filter=updateCard"
                         //+ "&since=2019-06-01"
-                        + "&filter=createCard" 
-                        + "&limit=1000";
+                        + "&before=" + beforeDate.ToString(CoreConstants.Formats.DtmZuluIso)
+                        + "&limit=" + SolutionConstants.kTrelloLimitMax.ToString();
 
                     var response = await http.GetAsync(url);
 
@@ -383,13 +450,48 @@ namespace esdc_sa_appdev_reporting_api.Services
                     Console.WriteLine($"Error in GetTrelloCardMoveActions: {httpRequestException.Message}");
                 }
 
-                return null;
+                return new List<TrelloActionDto>();
             }
         }
 
 
-        public async Task<List<TrelloActionDto>> GetTrelloCardMoveActions()
+        public async Task<List<TrelloActionDto>> GetAllTrelloCardCreateActions()
         {
+            var trelloActions = new List<TrelloActionDto>();
+            var beforeDate = DateTime.Now;
+            var isBreak = false;
+
+            while (isBreak == false)
+            {
+                var results = await this.GetTrelloCardCreateActions(beforeDate);
+
+                if (results.Count < SolutionConstants.kTrelloLimitMax)
+                {
+                    isBreak = true;
+                }
+                else
+                {
+                    // Grab the earliest date of the results.
+                    var dateMin = results.Min(x => x.DateFromId);
+
+                    // Because the earliest timestamp record may not necessarily be the last record within a given day, the target date is the last date + 1.                    
+                    beforeDate = dateMin.AddDays(1).Date;
+
+                    // Only keep the results of the last known full day.
+                    results = results.Where(x => x.DateFromId >= beforeDate).ToList();
+                }
+
+                trelloActions.AddRange(results);
+            }
+
+            return trelloActions;
+        }
+
+
+        public async Task<List<TrelloActionDto>> GetTrelloCardCreateActions(DateTime beforeDate)
+        {
+            // Reference: https://stackoverflow.com/questions/51777063/how-can-i-get-all-actions-for-a-board-using-trellos-rest-api
+
             using (var http = new HttpClient())
             {
                 try
@@ -397,10 +499,9 @@ namespace esdc_sa_appdev_reporting_api.Services
                     var url = "https://api.trello.com/1/boards/" + SolutionConstants.kTrelloBoardId + "/actions/"
                         + "?key=" + SolutionConstants.kTrelloAppKey 
                         + "&token=" + SolutionConstants.kTrelloUserToken
-                        //+ "&before=2019-07-01"
-                        //+ "&since=2019-06-01"
-                        + "&filter=updateCard" 
-                        + "&limit=1000";
+                        + "&filter=createCard"
+                        + "&before=" + beforeDate.ToString(CoreConstants.Formats.DtmZuluIso)
+                        + "&limit=" + SolutionConstants.kTrelloLimitMax.ToString();
 
                     var response = await http.GetAsync(url);
 
@@ -408,19 +509,16 @@ namespace esdc_sa_appdev_reporting_api.Services
 
                     var jsonResult = await response.Content.ReadAsStringAsync();
 
-                    var list = JsonConvert.DeserializeObject<List<TrelloActionDto>>(jsonResult);
-
-                    return list.Where(x => (x.IsListTransfer() == true)).ToList();
+                    return JsonConvert.DeserializeObject<List<TrelloActionDto>>(jsonResult);
                 }
                 catch (HttpRequestException httpRequestException)
                 {
                     Console.WriteLine($"Error in GetTrelloCardMoveActions: {httpRequestException.Message}");
                 }
 
-                return null;
+                return new List<TrelloActionDto>();
             }
         }
-
         
         #region --- Private -------------------------------------------------------
 

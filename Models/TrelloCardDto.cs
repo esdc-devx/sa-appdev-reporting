@@ -18,6 +18,8 @@ namespace esdc_sa_appdev_reporting_api.Models
         { 
             get
             {
+                // https://help.trello.com/article/759-getting-the-time-a-card-or-board-was-created
+                
                 var timestamp = int.Parse(this.id.Substring(0, 8), System.Globalization.NumberStyles.HexNumber);
                 
                 var dateTimeOffset = DateTimeOffset.FromUnixTimeSeconds(timestamp);

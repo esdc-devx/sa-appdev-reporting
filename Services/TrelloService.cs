@@ -134,10 +134,8 @@ namespace esdc_sa_appdev_reporting_api.Services
         public async Task<List<GeneralReportResult>> GetGeneralReportResults()
         {
             // 1. Gather all cards
-            // 2. Compute date started and completed
-            //    2.a) Cards that were transferred from Backlog or Committed
-            //    2.b) Cards that were created directly in either In Progress, On Hold or Done.
-            // 3. Compute number of days on hold
+            // 2. Compute a card's start date
+            // 3. Compute a card's completed date
 
             var results = new List<GeneralReportResult>();
 
@@ -147,6 +145,7 @@ namespace esdc_sa_appdev_reporting_api.Services
             var trelloCards = await this.GetAllTrelloCards();
             var trelloCardMoveActions = await this.GetAllTrelloCardMoveActions();
             var trelloCardCreatedActions = await this.GetAllTrelloCardCreateActions();
+            var trelloCardCopyActions = await this.GetAllTrelloCardCopyActions();
 
             // Pre-sort
             trelloCardMoveActions
@@ -191,11 +190,12 @@ namespace esdc_sa_appdev_reporting_api.Services
                     );
                 }
 
+                // Step 2
                 // Card in backlog and committed aren't considered started.
                 if ((result.CardCurrentListTitle != SolutionConstants.TrelloLists.Backlog) &&
                     (result.CardCurrentListTitle != SolutionConstants.TrelloLists.Committed))
                 {
-                    // 2.a)
+                    // 2.a) The start date is taken from the first action that moved the card in the 'In Progress' list.
                     var action = trelloCardMoveActions
                         .Where
                         (   
@@ -206,7 +206,8 @@ namespace esdc_sa_appdev_reporting_api.Services
                         .OrderBy(x => x.date)
                         .FirstOrDefault();
 
-                    // 2.b)
+                    // 2.b) If the card wasn't moved into the 'In Progress' list, but was directly created in a list, 
+                    // then the start date is taken from its create action.
                     if (action == null)
                     {
                         action = trelloCardCreatedActions
@@ -215,12 +216,24 @@ namespace esdc_sa_appdev_reporting_api.Services
                             .FirstOrDefault();
                     }
 
+                    // 2.c) If the card wasn't created in the 'In Progress' list, but was directly copied in a list, 
+                    // then the start date is taken from its copy action.
+                    if (action == null)
+                    {
+                        action = trelloCardCopyActions
+                            .Where(x => x.data.card.id == card.id)
+                            .OrderBy(x => x.date)
+                            .FirstOrDefault();
+                    }
+
                     result.CardDateStarted = action?.date;
                 }
 
+                // Step 3
                 // Only cards in done are considered completed.
                 if (result.CardCurrentListTitle == SolutionConstants.TrelloLists.Done)
                 {
+                    // 3.a) The card completed date is taken from the last action that placed the card in the 'Done' list.
                     var action = trelloCardMoveActions
                         .Where
                         (
@@ -230,6 +243,26 @@ namespace esdc_sa_appdev_reporting_api.Services
                         )
                         .OrderByDescending(x => x.date)
                         .FirstOrDefault();
+
+                    // 3.b) If the card wasn't moved into the 'Done' list, but was directly created in it, 
+                    // then the start date is taken from its create action.
+                    if (action == null)
+                    {
+                        action = trelloCardCreatedActions
+                            .Where(x => x.data.card.id == card.id)
+                            .OrderBy(x => x.date)
+                            .FirstOrDefault();
+                    }
+
+                    // 3.c) If the card wasn't created in the 'Done' list, but was directly copied in it, 
+                    // then the start date is taken from its copy action.
+                    if (action == null)
+                    {
+                        action = trelloCardCopyActions
+                            .Where(x => x.data.card.id == card.id)
+                            .OrderBy(x => x.date)
+                            .FirstOrDefault();
+                    }
 
                     result.CardDateCompleted = action?.date;
                 }
@@ -391,6 +424,8 @@ namespace esdc_sa_appdev_reporting_api.Services
 
         public async Task<List<TrelloActionDto>> GetAllTrelloCardMoveActions()
         {
+            // Reference: https://stackoverflow.com/questions/51777063/how-can-i-get-all-actions-for-a-board-using-trellos-rest-api
+
             var trelloActions = new List<TrelloActionDto>();
             var beforeDate = DateTime.Now;
             var isBreak = false;
@@ -490,8 +525,6 @@ namespace esdc_sa_appdev_reporting_api.Services
 
         public async Task<List<TrelloActionDto>> GetTrelloCardCreateActions(DateTime beforeDate)
         {
-            // Reference: https://stackoverflow.com/questions/51777063/how-can-i-get-all-actions-for-a-board-using-trellos-rest-api
-
             using (var http = new HttpClient())
             {
                 try
@@ -514,6 +547,70 @@ namespace esdc_sa_appdev_reporting_api.Services
                 catch (HttpRequestException httpRequestException)
                 {
                     Console.WriteLine($"Error in GetTrelloCardMoveActions: {httpRequestException.Message}");
+                }
+
+                return new List<TrelloActionDto>();
+            }
+        }
+
+
+        public async Task<List<TrelloActionDto>> GetAllTrelloCardCopyActions()
+        {
+            var trelloActions = new List<TrelloActionDto>();
+            var beforeDate = DateTime.Now;
+            var isBreak = false;
+
+            while (isBreak == false)
+            {
+                var results = await this.GetTrelloCardCopyActions(beforeDate);
+
+                if (results.Count < SolutionConstants.kTrelloLimitMax)
+                {
+                    isBreak = true;
+                }
+                else
+                {
+                    // Grab the earliest date of the results.
+                    var dateMin = results.Min(x => x.DateFromId);
+
+                    // Because the earliest timestamp record may not necessarily be the last record within a given day, the target date is the last date + 1.                    
+                    beforeDate = dateMin.AddDays(1).Date;
+
+                    // Only keep the results of the last known full day.
+                    results = results.Where(x => x.DateFromId >= beforeDate).ToList();
+                }
+
+                trelloActions.AddRange(results);
+            }
+
+            return trelloActions;
+        }
+
+
+        public async Task<List<TrelloActionDto>> GetTrelloCardCopyActions(DateTime beforeDate)
+        {
+            using (var http = new HttpClient())
+            {
+                try
+                {
+                    var url = "https://api.trello.com/1/boards/" + SolutionConstants.kTrelloBoardId + "/actions/"
+                        + "?key=" + SolutionConstants.kTrelloAppKey 
+                        + "&token=" + SolutionConstants.kTrelloUserToken
+                        + "&filter=copyCard"
+                        + "&before=" + beforeDate.ToString(CoreConstants.Formats.DtmZuluIso)
+                        + "&limit=" + SolutionConstants.kTrelloLimitMax.ToString();
+
+                    var response = await http.GetAsync(url);
+
+                    response.EnsureSuccessStatusCode();
+
+                    var jsonResult = await response.Content.ReadAsStringAsync();
+
+                    return JsonConvert.DeserializeObject<List<TrelloActionDto>>(jsonResult);
+                }
+                catch (HttpRequestException httpRequestException)
+                {
+                    Console.WriteLine($"Error in GetTrelloCardCopyActions: {httpRequestException.Message}");
                 }
 
                 return new List<TrelloActionDto>();
